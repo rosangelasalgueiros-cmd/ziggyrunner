@@ -1,0 +1,204 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+  <meta charset="utf-8" />
+  <title>Ziggy Runner</title>
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <style>
+    html, body {
+      margin: 0; padding: 0; width: 100vw; height: 100vh; overflow: hidden;
+      background: #000; font-family: Arial, sans-serif;
+    }
+    #stage { position: relative; width: 100%; height: 100%; }
+    canvas { display: block; width: 100%; height: 100%; }
+    .ui {
+      position: absolute; top: 10px; left: 10px; right: 10px;
+      display: flex; gap: 8px; justify-content: space-between;
+      color: #fff; z-index: 20;
+    }
+    .panel { background: rgba(0,0,0,.4); padding: 6px 10px; border-radius: 6px; }
+    #ziggySprite {
+      position: absolute; width: 120px; height: 120px;
+      pointer-events: none; z-index: 10;
+      filter: drop-shadow(0 8px 6px rgba(0,0,0,0.5));
+    }
+    .overlay {
+      position: absolute; inset: 0;
+      display: flex; flex-direction: column; align-items: center; justify-content: center;
+      background: linear-gradient(#87CEEB, #fff);
+      z-index: 50; text-align: center;
+    }
+    .overlay h1 { font-size: 48px; margin: 10px; }
+    .overlay button {
+      font-size: 22px; padding: 12px 26px; border: none;
+      border-radius: 10px; background: #ffcc00; cursor: pointer;
+    }
+    .btn { cursor: pointer; }
+  </style>
+</head>
+<body>
+<div id="stage">
+  <canvas id="game"></canvas>
+  <img id="ziggySprite" src="https://i.imgur.com/3agFCFR.gif" alt="Ziggy" />
+
+  <div class="ui">
+    <div class="panel">Pontos: <span id="score">0</span></div>
+    <div class="panel">Nível: <span id="level">1</span></div>
+    <div class="panel" id="timeLabel">Dia</div>
+    <div class="panel btn" id="muteBtn">🔊</div>
+  </div>
+
+  <div id="startScreen" class="overlay" style="background: rgba(0,0,0,0);">
+    <h1 style="color:#fff;text-shadow:2px 2px 4px #000">Ziggy Runner</h1>
+    <button id="startBtn">Iniciar ▶</button>
+  </div>
+
+  <div id="gameOverScreen" class="overlay" style="display:none">
+    <h1>Game Over</h1>
+    <p>Pontuação: <span id="finalScore">0</span></p>
+    <button id="restartBtn">Jogar Novamente</button>
+  </div>
+</div>
+
+<audio id="music" loop>
+  <source src="https://cdn.pixabay.com/audio/2022/03/15/audio_7c7b3d41c4.mp3" type="audio/mpeg">
+</audio>
+<audio id="coinSound">
+  <source src="https://cdn.pixabay.com/audio/2022/03/15/audio_1.mp3" type="audio/mpeg">
+</audio>
+
+<script>
+// ================= SETUP =================
+const canvas = document.getElementById('game');
+const ctx = canvas.getContext('2d');
+const ziggySprite = document.getElementById('ziggySprite');
+const startScreen = document.getElementById('startScreen');
+const gameOverScreen = document.getElementById('gameOverScreen');
+const startBtn = document.getElementById('startBtn');
+const restartBtn = document.getElementById('restartBtn');
+const music = document.getElementById('music');
+const coinSound = document.getElementById('coinSound');
+const muteBtn = document.getElementById('muteBtn');
+const timeLabel = document.getElementById('timeLabel');
+
+const scoreEl = document.getElementById('score');
+const levelEl = document.getElementById('level');
+const finalScoreEl = document.getElementById('finalScore');
+
+let score = 0;
+let level = 1;
+let speed = 4;
+let state = 'start';
+let muted = false;
+let GROUND_Y = 0;
+let time = 0;
+
+function resize() {
+  canvas.width = window.innerWidth;
+  canvas.height = window.innerHeight;
+  GROUND_Y = canvas.height * 0.78;
+}
+window.addEventListener('resize', resize);
+resize();
+
+// ================= FUNDO =================
+const bgImg = new Image();
+bgImg.src = 'https://i.imgur.com/sRbVsGV.jpeg';
+let bgX = 0;
+
+// ================= ZIGGY =================
+const ziggy = { x: 120, y: 0, w: 120, h: 120, vy: 0, jumping: false };
+const gravity = 0.8;
+ziggy.y = GROUND_Y - ziggy.h;
+
+// ================= OBJETOS =================
+let trees = [];
+let obstacles = [];
+let gems = [];
+let clouds = [];
+
+function spawnObstacle() {
+  if (obstacles.length && canvas.width - obstacles.at(-1).x < 450) return;
+  obstacles.push({ x: canvas.width, y: GROUND_Y - 28, w: 16, h: 28 });
+}
+function spawnGem() { gems.push({ x: canvas.width, y: GROUND_Y - 110, r: 14 }); }
+function spawnCloud() { clouds.push({ x: canvas.width, y: Math.random()*200+30, s: Math.random()*0.5+0.3 }); }
+function spawnTree() { trees.push({ x: canvas.width, h: 80+Math.random()*120, speed: 0.6 }); }
+
+function jump() {
+  if (!ziggy.jumping && state==='play') { ziggy.vy = -17; ziggy.jumping = true; }
+}
+
+document.addEventListener('keydown', e=> e.code==='Space' && jump());
+document.addEventListener('touchstart', jump);
+
+startBtn.onclick = startGame;
+restartBtn.onclick = resetGame;
+muteBtn.onclick = ()=>{ muted=!muted; music.muted=muted; coinSound.muted=muted; muteBtn.textContent=muted?'🔇':'🔊'; };
+
+function startGame(){ state='play'; startScreen.style.display='none'; music.play(); }
+function resetGame(){ score=0; level=1; speed=4; obstacles=[]; gems=[]; clouds=[]; trees=[]; ziggy.y=GROUND_Y-ziggy.h; ziggy.vy=0; gameOverScreen.style.display='none'; startGame(); }
+
+function loop(){ update(); draw(); requestAnimationFrame(loop); }
+
+function update(){
+  if(state!=='play') return;
+  time++;
+
+  ziggy.vy+=gravity; ziggy.y+=ziggy.vy;
+  if(ziggy.y>=GROUND_Y-ziggy.h){ ziggy.y=GROUND_Y-ziggy.h; ziggy.vy=0; ziggy.jumping=false; }
+
+  if(Math.random()<0.007) spawnObstacle();
+  if(Math.random()<0.025) spawnGem();
+  if(Math.random()<0.01) spawnCloud();
+  if(Math.random()<0.015) spawnTree();
+
+  obstacles.forEach(o=>o.x-=speed);
+  gems.forEach(g=>g.x-=speed);
+  clouds.forEach(c=>c.x-=speed*c.s);
+  trees.forEach(t=>t.x-=speed*t.speed);
+
+  obstacles=obstacles.filter(o=>o.x+o.w>0);
+  gems=gems.filter(g=>g.x+g.r>0);
+  clouds=clouds.filter(c=>c.x+200>0);
+  trees=trees.filter(t=>t.x+60>0);
+
+  obstacles.forEach(o=>{ if(ziggy.x<o.x+o.w&&ziggy.x+ziggy.w>o.x&&ziggy.y<o.y+o.h&&ziggy.y+ziggy.h>o.y) endGame(); });
+
+  gems.forEach((g,i)=>{ if(ziggy.x<g.x+g.r&&ziggy.x+ziggy.w>g.x-g.r&&ziggy.y<g.y+g.r&&ziggy.y+ziggy.h>g.y-g.r){ gems.splice(i,1); score+=10; coinSound.currentTime=0; coinSound.play(); }});
+
+  scoreEl.textContent=score; levelEl.textContent=level;
+  ziggySprite.style.left=ziggy.x+'px'; ziggySprite.style.top=ziggy.y+'px';
+}
+
+function endGame(){ state='over'; music.pause(); finalScoreEl.textContent=score; gameOverScreen.style.display='flex'; }
+
+function draw(){
+  const night = Math.sin(time*0.002) < 0;
+  timeLabel.textContent = night ? 'Noite' : 'Dia';
+
+  if(bgImg.complete){
+    const scale = canvas.height/bgImg.height;
+    const bgW = bgImg.width*scale;
+    bgX-=speed*0.3; if(bgX<=-bgW) bgX=0;
+    ctx.globalAlpha = night?0.5:1;
+    ctx.drawImage(bgImg,bgX,0,bgW,canvas.height);
+    ctx.drawImage(bgImg,bgX+bgW,0,bgW,canvas.height);
+    ctx.globalAlpha = 1;
+  }
+
+  clouds.forEach(c=>{ ctx.fillStyle='rgba(255,255,255,0.8)'; ctx.beginPath(); ctx.ellipse(c.x,c.y,60,25,0,0,Math.PI*2); ctx.fill(); });
+
+  trees.forEach(t=>{ ctx.fillStyle='#5D4037'; ctx.fillRect(t.x,GROUND_Y-t.h,20,t.h); ctx.beginPath(); ctx.fillStyle='#2E7D32'; ctx.arc(t.x+10,GROUND_Y-t.h,40,0,Math.PI*2); ctx.fill(); });
+
+  ctx.fillStyle='#D6B36A'; ctx.fillRect(0,GROUND_Y,canvas.width,canvas.height-GROUND_Y);
+
+  ctx.fillStyle='#6D4C41'; obstacles.forEach(o=>ctx.fillRect(o.x,o.y,o.w,o.h));
+
+  gems.forEach(g=>{ ctx.beginPath(); ctx.arc(g.x,g.y,g.r,0,Math.PI*2); ctx.fillStyle='#FFD700'; ctx.fill(); });
+}
+
+loop();
+</script>
+</body>
+</html>
